@@ -1,0 +1,354 @@
+---
+title: "Examining NCAA Play By Play Data"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r}
+library(tidyverse)
+library(scales)
+
+theme_set(theme_minimal())
+
+
+play_by_play <- read_csv("PlayByPlay_2019/Events_2019.csv")
+players_2019 <- read_csv("PlayByPlay_2019/Players_2019.csv")
+
+```
+
+
+What events are there in the dataset, and how many of each are there?
+
+```{r}
+play_by_play %>% count(EventType, sort = T) %>% DT::datatable()
+
+# get the list of event types to see which would relate to shooting 
+play_by_play %>% count(EventType) %>% pull(EventType)
+
+```
+
+
+Classifying the different shooting variables. This will include layups, dunks, 2-point jumpers, threes and free-throws
+
+```{r}
+# there are some shooting variables that can probably be condensed - tip ins and dunks
+paint_attempts_made <- c("made2_dunk", "made2_lay", "made2_tip") 
+paint_attempts_missed <- c("miss2_dunk", "miss2_lay", "miss2_tip") 
+paint_attempts <- c(paint_attempts_made, paint_attempts_missed)
+
+# create variables for field goals made, and also field goals attempted (which includes the sum of FGs made and FGs missed)
+FGM <- c("made2_dunk", "made2_jump", "made2_lay",  "made2_tip",  "made3_jump")
+FGA <- c(FGM, "miss2_dunk", "miss2_jump" ,"miss2_lay",  "miss2_tip",  "miss3_jump")
+
+# variable for three-pointers
+ThreePointer <- c("made3_jump", "miss3_jump")
+
+#  Two point jumper
+TwoPointJump <- c("miss2_jump", "made2_jump")
+
+# Free Throws
+FT <- c("miss1_free", "made1_free")
+
+# create a variable in the df for whether the attempts was made or missed
+play_by_play <- play_by_play %>% 
+  mutate(shot_outcome = ifelse(grepl("made", EventType), "Made", ifelse(grepl("miss", EventType), "Missed", NA))) %>% 
+  mutate(FGVariable = ifelse(EventType %in% FGA, "Yes", "No"),
+         AttemptType = ifelse(EventType %in% paint_attempts, "PaintVariable", ifelse(EventType %in% ThreePointer, "ThreeVariable", ifelse(EventType %in% TwoPointJump, "TwoPointJumper", ifelse(EventType %in% FT, "FreeThrow", "NoAttempt")))))
+
+```
+
+
+There were `r comma(sum(play_by_play$FGVariable == "Yes"))` field goals recorded in the data set provided. Looking at the NCAA site (https://stats.ncaa.org/rankings/conference_trends), there were actually almost 676K field goal attempts, but the percentages appear very similar.
+
+
+```{r}
+
+play_by_play %>% 
+  group_by(AttemptType) %>% 
+  summarise(n_shots = n()) %>% 
+  filter(AttemptType != "NoAttempt") %>% 
+  ggplot(aes(x= AttemptType, y= n_shots)) +
+  geom_col(fill = "steelblue", colour = "grey") +
+  geom_text(aes(label = comma(n_shots)), hjust =  1, colour = "white") +
+  scale_y_continuous(labels = comma, name = "Number of Attempts") +
+  coord_flip() +
+  ggtitle("MORE THREES ATTAMPTED THAN JUMPERS INSIDE THE LINE") +
+  theme(axis.title.y = element_blank(), panel.grid.minor = element_blank(), panel.grid.major = element_line(linetype = 2))
+
+```
+
+Threes were the most frequent shot types in the game during the 18/19 season, with `r percent(mean(play_by_play$AttemptType[play_by_play$FGVariable == "Yes"] == "ThreeVariable"))` of all field goals taken being three pointers. Points in the paint (layups, tip-ins and dunks) closely followed, with `r percent(mean(play_by_play$AttemptType[play_by_play$FGVariable == "Yes"] == "PaintVariable"))` of attempts coming from this valuable area. Two point jumpers made up the remainder, with `r percent(mean(play_by_play$AttemptType[play_by_play$FGVariable == "Yes"] == "TwoPointJumper"))` of the attempts.
+
+
+## NCAA overall shooting averages
+
+```{r}
+play_by_play %>% 
+  filter(FGVariable == "Yes") %>% 
+  group_by(AttemptType, shot_outcome) %>% 
+  summarise(n_attempts = n()) %>% 
+  mutate(ShootingPercentage = percent(n_attempts / sum(n_attempts))) %>% 
+  filter(shot_outcome == "Made") %>% select(-shot_outcome) %>% DT::datatable()
+
+```
+
+The FT% in the games analysed was a touch over 70% - not a bad clip, however lower than the NBA average for the 18-19 season (which was just over 76%).
+
+The overall FG% percentage was 44% on over 628k attempts. When we break this down further, it can be seen that shots in the paint (layups, dunks and tip-ins) were successful on 60% of the 224k attempts, while on two-point jumpers, the percentage fell to 36.4% on over 161k attempts. Suprisingly, tries on threes were only 2% less successful than 2-point jumpers, yet the potential payoff is 50% more points for taking the three. That's what the stat heads keep banging on about anyway.
+
+
+### Expected points
+
+We can measure how many points each shot attempts expected to yield. To do that, I'll extract the elements of the `PaintVariable` and measure their percentages and shot values.
+
+```{r}
+shot_values <- play_by_play %>% 
+  filter(FGVariable == "Yes") %>% 
+  mutate(EventType = str_remove(EventType, "made"), EventType = str_remove(EventType, "miss")) %>% 
+  group_by(EventType, shot_outcome) %>% 
+  summarise(n_attempts = n()) %>% 
+  mutate(ShootingPercentage = n_attempts / sum(n_attempts),
+         n_attempts = sum(n_attempts)) %>% 
+  filter(shot_outcome == "Made") %>% select(-shot_outcome)
+
+shot_values %>% mutate(ShootingPercentage = percent(ShootingPercentage)) %>%  DT::datatable()
+```
+
+
+Dunks are by far the most efficient shot type, with the league-wide shooting percentage of 88.4%, yielding an expected points of 1.77 points, while tip-ins are made at a rate of almost 70% worth 1.4 points. It's pretty obvious to see why basketball analytics junkies are screaming from the rooftops for players to stop shooting jumpers from inside the three point line - these shot types have an expected points 0.73 points per attempt...even less than the expected 1.03 points for threes!
+
+```{r}
+shot_values %>% 
+  mutate(Point = as.numeric(str_extract(EventType, "[[:digit:]]"))) %>% 
+  mutate(ExpectedPoints = ShootingPercentage * Point) %>% 
+  ggplot(aes(x=reorder(EventType, ExpectedPoints), y= ExpectedPoints)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(ExpectedPoints, 2)), vjust =  1.2, colour = "white") +
+  ggtitle("TWO POINT JUMPERS THE LEAST EFFICIENT SHOT TYPE") +
+  theme(panel.grid.major.y = element_blank(), panel.grid.minor.y = element_blank(), panel.grid.major.x = element_line(linetype = 2),
+        axis.title = element_blank(), axis.text.y = element_blank(), axis.text.x = element_text(size = 12, angle = 45))
+```
+
+
+
+
+
+## Assists vs Solo Attempts
+
+```{r}
+
+# Rework DF so only shots are included and whatever lead to the shot --------
+
+shooting_analysis <- play_by_play %>% 
+  mutate(GameID = paste(Season, DayNum, WTeamID, LTeamID, sep = "_")) %>% 
+  group_by(GameID, ElapsedSeconds) %>% 
+  mutate(EventType2 = lag(EventType),
+         EventPlayerID2 = lag(EventPlayerID))
+
+
+shooting_analysis <- shooting_analysis %>% 
+  mutate(FGVariableAny = ifelse(EventType %in% FGA | EventType2 %in% FGA, "Yes", "No")) %>% 
+  filter(FGVariableAny == "Yes") 
+
+
+# create a variable for if the shot was made, but then the second event was also a made shot
+shooting_analysis <- shooting_analysis %>% 
+  mutate(Alert = ifelse(EventType %in% FGM & EventType2 %in% FGM, "Alert", "OK"))
+
+shooting_analysis$EventType2[is.na(shooting_analysis$EventType2)] <- "no_second_event"
+
+
+# create a variable for if there was an assist on the FGM:
+shooting_analysis <- shooting_analysis %>% 
+  mutate(AssistedFGM = ifelse(EventType %in% FGM & EventType2 == "assist", "Assisted", 
+                              ifelse(EventType %in% FGM & EventType2 != "assist", "Solo", 
+                                     ifelse(EventType %in% FGM & EventType2 == "no_second_event", "Solo", "None"))))
+
+
+test <- shooting_analysis %>% 
+  filter(Alert == "OK") %>% 
+  select(GameID, ElapsedSeconds, EventPlayerID, FGVariable, AssistedFGM) %>% 
+  filter(FGVariable == "Yes")
+
+
+# # add player names
+# shooting_analysis <- shooting_analysis %>% 
+#   left_join(players_2019 %>% select(PlayerID, PlayerName), by = c("EventPlayerID" = "PlayerID")) %>% 
+#   left_join(players_2019 %>% select(PlayerID, PlayerName), by = c("EventPlayerID2" = "PlayerID"))
+
+```
+
+
+Field goals can be made either assisted, or un-assisted. Players that can create their own shots will usually see their skills transfer somewhat easier in different systems, while players (spot-up shooters) who require a facilitator will usually find their shot success closely tied to their facilitator and system. Lose a good point guard, and a great shooter can come back to the pack fairly quickly. It's the reason why NBA players like Steph Curry and James Harden are so valuable in today's NBA - great offensive players capable of creating for themselves.
+
+It can be seen below that the 2018/19 Div 1 season saw just under 20% of threes un-assisted. Contrast this with two point jumpers, which were un-assisted on 71% of these made attempts. As expected, almost all tip-ins were un-assisted (I don't know how a tip in could be assisted anyway).
+
+
+
+```{r}
+shooting_analysis %>% 
+  filter(AssistedFGM != "None") %>% 
+  group_by(EventType, AssistedFGM) %>% 
+  summarise(n = n()) %>% 
+  mutate(perc = n / sum(n)) %>% 
+  ggplot(aes(x=EventType, y= perc, fill = AssistedFGM)) +
+  geom_col(colour = "black") +
+  geom_text(aes(label = ifelse(AssistedFGM == "Solo", percent(perc), "")), hjust = 1.2, colour = "white") +
+  scale_fill_manual(values = c("grey", "steelblue")) +
+  scale_y_continuous(labels = percent, name = "Percent Made Shots") +
+  coord_flip() +
+  ggtitle("SOME SHOT TYPES ARE ASSISTED MORE THAN OTHERS") +
+  theme(legend.position = "top", legend.title = element_blank(), axis.title.x = element_text(hjust = 1), axis.title.y = element_blank())
+```
+
+
+
+# Best Own FG Creators
+
+On average, players took 137 shots for the season.
+
+```{r}
+shot_attempts <- play_by_play %>% 
+  filter(FGVariable == "Yes") %>% 
+  group_by(EventPlayerID) %>% 
+  summarise(n_attempts = n()) %>% ungroup() %>% arrange(desc(n_attempts)) %>% left_join(players_2019, by = c("EventPlayerID" = "PlayerID")) 
+
+
+shot_attempts %>%
+  ggplot(aes(x= n_attempts)) +
+  geom_histogram(fill = "steelblue", colour = "grey") +
+  geom_vline(xintercept = mean(shot_attempts$n_attempts), linetype = 2) +
+  annotate("text", x=300, y= 400, label = paste0("Average player\ntook ", round(mean(shot_attempts$n_attempts)), " shots")) +
+  labs(x= "Shot Attempts", y= "", title = "PLAYER SHOT ATTEMPTS") +
+  theme(axis.title.x = element_text(hjust = 1, size = 12))
+```
+
+
+```{r}
+players_over200_shots <- shot_attempts %>% 
+  
+```
+
+
+
+
+
+```{r}
+league_averages <- shooting_analysis %>% 
+  filter(AssistedFGM != "None") %>% 
+  ggplot(aes(x=EventType, fill = AssistedFGM)) +
+  geom_bar(stat = "count", position = "fill", colour = "black") +
+  scale_fill_manual(values = c("grey", "steelblue")) +
+  scale_y_continuous(labels = percent) +
+  coord_flip() +
+  ggtitle("NCAA AVERAGES")
+
+
+ja_morrant <- shooting_analysis %>% 
+  filter(AssistedFGM != "None") %>% 
+  filter(EventPlayerID == 656216) %>% 
+  ggplot(aes(x=EventType, fill = AssistedFGM)) +
+  geom_bar(stat = "count", position = "fill", colour = "black") +
+  scale_fill_manual(values = c("grey", "steelblue")) +
+  scale_y_continuous(labels = percent) +
+  coord_flip() +
+  ggtitle("JA MORRANT GETS HIS OWN BUCKETS")
+
+
+gridExtra::grid.arrange(league_averages, ja_morrant)
+
+
+
+
+
+shooting_analysis %>% 
+  filter(AssistedFGM != "None") %>%
+  group_by(shot_outcome, AssistedFGM) %>% 
+  summarise(n = n())
+
+
+
+
+threes_made <- shooting_analysis %>% 
+  filter(EventType == 'made3_jump') %>% 
+  group_by(EventPlayerID, AssistedFGM) %>%
+  summarise(n = n()) %>% 
+  mutate(PercentAssisted = n / sum(n)) %>% ungroup()
+
+
+threes_made %>% 
+  filter(AssistedFGM == "Solo") %>% 
+  arrange(desc(n)) %>% head(10)
+
+
+
+percent_assisted <- shooting_analysis %>% 
+  filter(AssistedFGM != "None", Alert == "OK") %>% 
+  group_by(EventPlayerID, AssistedFGM) %>% 
+  summarise(n_FGM = n()) %>% 
+  mutate(PercentAssisted = n_FGM / sum(n_FGM)) %>% 
+  group_by(EventPlayerID) %>% 
+  mutate(total_made = sum(n_FGM)) %>% 
+  left_join(players_2019 %>% select(PlayerID, PlayerName), by = c("EventPlayerID" = "PlayerID")) 
+
+percent_assisted %>% 
+  filter(AssistedFGM == "Solo",
+         total_made > 50) %>% 
+  arrange(desc(PercentAssisted)) %>% head(10)
+
+
+percent_assisted %>% 
+  filter(AssistedFGM == "Solo",
+         total_made > 50) %>% 
+  arrange(desc(PercentAssisted)) %>%
+  ggplot(aes(x= PercentAssisted)) + geom_histogram()
+
+
+percent_assisted %>% 
+  filter(AssistedFGM == "Solo", total_made > 50) %>% 
+  arrange(desc(PercentAssisted)) %>%
+  ggplot(aes(x= PercentAssisted, y= total_made)) + geom_point() +geom_smooth(method = "lm")
+
+
+percent_assisted %>% 
+  distinct(EventPlayerID, .keep_all = T) %>% 
+  ggplot(aes(x= total_made)) + geom_histogram()
+
+
+percent_assisted %>% 
+  filter(str_detect(PlayerName, "MORANT"))
+
+percent_assisted %>% 
+  filter(AssistedFGM == "Solo") %>% 
+  filter(PercentAssisted >= 0.75 & total_made >200)
+
+
+
+
+
+
+
+
+different_shot_types <- shooting_analysis %>% 
+  filter(AssistedFGM != "None") %>%
+  group_by(EventPlayerID, EventType, AssistedFGM) %>% 
+  summarise(n_shots = n()) %>%
+  mutate(proportion = n_shots / sum(n_shots)) %>% 
+  left_join(players_2019 %>% select(PlayerID, PlayerName), by = c("EventPlayerID" = "PlayerID")) 
+
+
+
+
+different_shot_types %>% 
+  filter(EventType == "made3_jump") %>% 
+  arrange(desc(n_shots)) %>% View()
+
+
+```
+
+
