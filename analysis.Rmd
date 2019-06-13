@@ -67,7 +67,6 @@ There were `r comma(sum(play_by_play$FGVariable == "Yes"))` field goals recorded
 
 
 ```{r}
-
 play_by_play %>% 
   group_by(AttemptType) %>% 
   summarise(n_shots = n()) %>% 
@@ -116,7 +115,20 @@ shot_values <- play_by_play %>%
          n_attempts = sum(n_attempts)) %>% 
   filter(shot_outcome == "Made") %>% select(-shot_outcome)
 
-shot_values %>% mutate(ShootingPercentage = percent(ShootingPercentage)) %>%  DT::datatable()
+library(waffle)
+library(extrafont)
+
+iron(
+  waffle(c(made=88, miss=12), rows = 5, title = "Dunks (21,690 attempts)", colors = c("steelblue", "grey")),
+  waffle(c(made=70, miss=30), rows = 5, title = "Tip Ins (3,787 attempts)", colors = c("steelblue", "grey")),
+  waffle(c(made=57, miss=43), rows = 5, title = "Layups (198,436 attempts)", colors = c("steelblue", "grey")),
+  waffle(c(made=36, miss=64), rows = 5, title = "2-Point Jumpers (161,415 attempts)", colors = c("steelblue", "grey")),
+  waffle(c(made=34, miss=66), rows = 5, title = "3-Point Jumpers (243,274 attempts)", colors = c("steelblue", "grey"))
+  )
+
+
+
+
 ```
 
 
@@ -202,15 +214,14 @@ shooting_analysis %>%
   scale_fill_manual(values = c("grey", "steelblue")) +
   scale_y_continuous(labels = percent, name = "Percent Made Shots") +
   coord_flip() +
-  ggtitle("SOME SHOT TYPES ARE ASSISTED MORE THAN OTHERS") +
+  ggtitle("SOLO TWO-POINT JUMP SHOTS MORE FREQUENT THAN THREES") +
   theme(legend.position = "top", legend.title = element_blank(), axis.title.x = element_text(hjust = 1), axis.title.y = element_blank())
+
 ```
 
 
 
-# Best Own FG Creators
 
-On average, players took 137 shots for the season.
 
 ```{r}
 shot_attempts <- play_by_play %>% 
@@ -218,7 +229,13 @@ shot_attempts <- play_by_play %>%
   group_by(EventPlayerID) %>% 
   summarise(n_attempts = n()) %>% ungroup() %>% arrange(desc(n_attempts)) %>% left_join(players_2019, by = c("EventPlayerID" = "PlayerID")) 
 
+```
 
+
+On average, players took `r round(mean(shot_attempts$n_attempts))` shots for the season. `r sum(shot_attempts$n_attempts >= 200)` players (`r percent(mean(shot_attempts$n_attempts >= 200))`) attempted 200 or more shots during the 18-19 season.
+
+
+```{r}
 shot_attempts %>%
   ggplot(aes(x= n_attempts)) +
   geom_histogram(fill = "steelblue", colour = "grey") +
@@ -228,15 +245,56 @@ shot_attempts %>%
   theme(axis.title.x = element_text(hjust = 1, size = 12))
 ```
 
+Exploring the top shooters (over 200 attempts)
 
 ```{r}
 players_over200_shots <- shot_attempts %>% 
+  filter(n_attempts >= 200)
+
+
+players_over200_analysis <- shooting_analysis %>% 
+  filter(EventPlayerID %in% players_over200_shots$EventPlayerID)
+
+
+players_over200_analysis <- players_over200_analysis %>% 
+  mutate(FG_Outcome = ifelse(EventType %in% FGM | EventType2 %in% FGM, "Made", "Miss"))
+
+
+players_over200_analysis <- players_over200_analysis %>% 
+  filter(Alert == "OK")
+
+
+
+top_fg_percentage <- play_by_play %>% 
+  filter(EventPlayerID %in% players_over200_shots$EventPlayerID) %>% 
+  filter(FGVariable == "Yes") %>% 
+  group_by(EventPlayerID, AttemptType, shot_outcome) %>% 
+  summarise(n_shots = n()) %>% 
+  mutate(percentage = n_shots / sum(n_shots))
+
+
+top_fg_percentage <- top_fg_percentage %>% 
+  left_join(players_2019 %>% select(PlayerID, PlayerName), by = c("EventPlayerID" = "PlayerID"))
+
+
+top_fg_percentage %>% filter(n_shots > 50, percentage > 0.5, shot_outcome == "Made") %>% View()
+
+
+
   
 ```
 
 
 
+# Things to analyse:
+* who are the best shot creators (both assists and FGMs combined)
+* shooting percentages at each position (both player position and court)
+* best solo shooters
 
+
+
+
+# Best Own FG Creators
 
 ```{r}
 league_averages <- shooting_analysis %>% 
